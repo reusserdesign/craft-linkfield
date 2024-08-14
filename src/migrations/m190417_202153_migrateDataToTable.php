@@ -1,4 +1,5 @@
 <?php
+// reference https://gist.github.com/pdaleramirez/681b1fffb082c7ceed8be02f5c7455e8
 
 namespace lenz\linkfield\migrations;
 
@@ -12,7 +13,6 @@ use craft\helpers\Json;
 use lenz\linkfield\fields\LinkField;
 use lenz\linkfield\records\LinkRecord;
 use verbb\supertable\fields\SuperTableField;
-use Yii;
 
 /**
  * m190417_202153_migrateDataToTable migration.
@@ -23,7 +23,8 @@ class m190417_202153_migrateDataToTable extends Migration
   /**
    * @inheritdoc
    */
-  public function safeUp(): bool {
+  public function safeUp(): bool
+  {
     if (!$this->db->tableExists(LinkRecord::tableName())) {
       (new Install())->safeUp();
     }
@@ -36,7 +37,8 @@ class m190417_202153_migrateDataToTable extends Migration
   /**
    * @inheritdoc
    */
-  public function safeDown(): bool {
+  public function safeDown(): bool
+  {
     $this->dropTableIfExists(LinkRecord::tableName());
     return true;
   }
@@ -48,7 +50,8 @@ class m190417_202153_migrateDataToTable extends Migration
   /**
    * @return void
    */
-  private function updateAllFields(): void {
+  private function updateAllFields(): void
+  {
     $service = Craft::$app->getFields();
     $service->refreshFields();
 
@@ -60,7 +63,8 @@ class m190417_202153_migrateDataToTable extends Migration
   /**
    * @return void
    */
-  private function updateAllSettings(): void {
+  private function updateAllSettings(): void
+  {
     $this->update(Table::FIELDS, [
       'type' => 'lenz\\linkfield\\fields\\LinkField',
     ], [
@@ -87,7 +91,8 @@ class m190417_202153_migrateDataToTable extends Migration
    * @param string $table
    * @param string $handlePrefix
    */
-  private function updateField(FieldInterface $field, string $table, string $handlePrefix = ''): void {
+  private function updateField(FieldInterface $field, string $table, string $handlePrefix = ''): void
+  {
     if ($field instanceof LinkField) {
       $this->updateLinkField($field, $table, $handlePrefix);
     } elseif ($field instanceof Matrix) {
@@ -100,15 +105,16 @@ class m190417_202153_migrateDataToTable extends Migration
   /**
    * @param Matrix $matrixField
    */
-  private function updateMatrixField(Matrix $matrixField): void {
+  private function updateMatrixField(Matrix $matrixField): void
+  {
     $table = $matrixField->contentTable;
     $blockTypes = Craft::$app
       ->getMatrix()
       ->getBlockTypesByFieldId($matrixField->id);
 
     foreach ($blockTypes as $blockType) {
-      foreach ($blockType->getCustomFields() as $field) {
-        $this->updateField($field, $table, $blockType->handle.'_');
+      foreach ($blockType->getFields() as $field) {
+        $this->updateField($field, $table, $blockType->handle . '_');
       }
     }
   }
@@ -118,103 +124,103 @@ class m190417_202153_migrateDataToTable extends Migration
    * @param string $table
    * @param string $handlePrefix
    */
-  private function updateLinkField(LinkField $field, string $table, string $handlePrefix = ''): void {
+  private function updateLinkField(LinkField $field, string $table, string $handlePrefix = ''): void
+  {
     $insertRows = [];
-    $columnsToDrop = [];
     $columnName = ($field->columnPrefix ?: 'field_') . $handlePrefix . $field->handle;
-    if (!$this->db->tableExists($table)) {
-      return;
-    }
     if ($field->columnSuffix) {
       $columnName .= '_' . $field->columnSuffix;
     }
 
-    $writeRows = function($rows) {
+    $writeRows = function ($rows) {
       if (count($rows)) {
-        $this->batchInsert(LinkRecord::tableName(), [
-          'elementId', 'siteId', 'fieldId', 'linkedId', 'linkedSiteId', 'type', 'linkedUrl', 'payload'
-        ], $rows);
-      }
-    };
-
-    $yiiTable = Yii::$app->db->schema->getTableSchema($table);
-    if (isset($yiiTable->columns[$columnName])) {
-        // do something
-
-
-        // Make sure the rows actually exist in the elements table.
-        $rowQuery = (new Query())
-        ->select(['t.elementId', 't.siteId', 't.'.$columnName])
-        ->from(['t' => $table])
-        ->innerJoin(['e' => Table::ELEMENTS], '[[t.elementId]] = [[e.id]]');
-        $rows = $rowQuery->all();
-
         foreach ($rows as $row) {
+          $doesExist = (new Query())
+            ->select('id')
+            ->where(['elementId' => $row[0], 'fieldId' => $row[2]])
+            ->from(LinkRecord::tableName())
+            ->exists();
 
-          if (substr($row[$columnName], 0, 1) != "{") {
+          if ($doesExist) {
             continue;
           }
 
-              $payload = Json::decode((string)$row[$columnName], $associative=true, $depth=512, JSON_THROW_ON_ERROR);
-
-            if (!is_array($payload)) {
-                continue;
-            }
-
-            $type = $payload['type'] ?? null;
-            $value = $payload['value'] ?? '';
-            unset($payload['type']);
-            unset($payload['value']);
-
-            if ($value && is_numeric($value)) {
-                $doesExist = (new Query())
-                  ->select('id')
-                  ->where(['id' => $value])
-                  ->from('{{%elements}}')
-                  ->exists();
-
-                if (!$doesExist) {
-                    $value = null;
-                }
-            }
-
-            $insertRows[] = [
-              $row['elementId'],                          // elementId
-              $row['siteId'],                             // siteId
-              $field->id,                                 // fieldId
-              is_numeric($value) ? $value : null,         // linkedId
-              is_numeric($value) ? $row['siteId'] : null, // linkedSiteId
-              $type,                                      // type
-              is_numeric($value) ? null : $value,         // linkedUrl
-              Json::encode($payload)                      // payload
-            ];
-
-            if (count($insertRows) > 100) {
-                $writeRows($insertRows);
-                $insertRows = [];
-            }
-            if (!in_array($columnName, $columnsToDrop)) {
-                $columnsToDrop[] = $columnName;
-            }
+          $this->insert(LinkRecord::tableName(), [
+            'elementId' => $row[0],
+            'siteId' => $row[1],
+            'fieldId' => $row[2],
+            'linkedId' => $row[3],
+            'linkedSiteId' => $row[4],
+            'type' => $row[5],
+            'linkedUrl' => $row[6],
+            'payload' => $row[7],
+          ]);
         }
+      }
+    };
+
+    // Make sure the rows actually exist in the elements table.
+    $rows = (new Query())
+      ->select(['t.elementId', 't.siteId', 't.' . $columnName])
+      ->from(['t' => $table])
+      ->innerJoin(['e' => Table::ELEMENTS], '[[t.elementId]] = [[e.id]]')
+      ->all();
+
+    foreach ($rows as $row) {
+      $payload = Json::decodeIfJson($row[$columnName]);
+      try {
+        if (!is_array($payload)) {
+          continue;
+        }
+      } catch (\Exception $e) {
+        $message = $e->getMessage();
+      }
+
+
+      $type = $payload['type'] ?? null;
+      $value = $payload['value'] ?? '';
+      unset($payload['type']);
+      unset($payload['value']);
+
+      if ($value && is_numeric($value)) {
+        $doesExist = (new Query())
+          ->select('id')
+          ->where(['id' => $value])
+          ->from('{{%elements}}')
+          ->exists();
+
+        if (!$doesExist) {
+          $value = null;
+        }
+      }
+
+      $insertRows[] = [
+        $row['elementId'],                          // elementId
+        $row['siteId'],                             // siteId
+        $field->id,                                 // fieldId
+        is_numeric($value) ? $value : null,         // linkedId
+        is_numeric($value) ? $row['siteId'] : null, // linkedSiteId
+        $type,                                      // type
+        is_numeric($value) ? null : $value,         // linkedUrl
+        Json::encode($payload)                      // payload
+      ];
+
+      if (count($insertRows) > 100) {
+        $writeRows($insertRows);
+        $insertRows = [];
+      }
     }
 
     $writeRows($insertRows);
-
-    foreach ($columnsToDrop as $col) {
-      $yiiTable = Yii::$app->db->schema->getTableSchema($table);
-      if (isset($yiiTable->columns[$columnName])) {
-          $this->dropColumn($table, $col);
-      }
-    }
-    //
+    $this->dropColumn($table, $columnName);
   }
 
   /**
    * @param string $settings
    * @return string
    */
-  private function updateSettings(string $settings): string {
+  private function updateSettings(string $settings): string
+  {
     $settings = Json::decode($settings);
     if (!is_array($settings)) {
       $settings = array();
@@ -248,7 +254,8 @@ class m190417_202153_migrateDataToTable extends Migration
   /**
    * @param SuperTableField $superTableField
    */
-  private function updateSuperTable(SuperTableField $superTableField): void {
+  private function updateSuperTable(SuperTableField $superTableField): void
+  {
     foreach ($superTableField->getBlockTypeFields() as $field) {
       $this->updateField($field, $superTableField->contentTable);
     }
